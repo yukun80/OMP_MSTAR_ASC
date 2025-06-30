@@ -1,4 +1,4 @@
-# **正交匹配追踪（OMP）**散射中心提取
+# **正交匹配追踪（OMP）**散射中心提取任务目标
 
 ### **1 正交匹配追踪（OMP）：行业标准实现**
 
@@ -73,26 +73,19 @@ def amp_solver(A, y, max_iter=30, sparsity_ratio=0.1):
 
 ```
 graph TD
-    A["MSTAR .raw Data<br/>(128×128 complex)"] --> B["数据预处理<br/>Data Preprocessing"]
-    B --> C["字典构建<br/>Dictionary Construction"]
-    C --> D["OMP稀疏重构<br/>OMP Sparse Reconstruction"]
-    D --> E["散射中心提取<br/>Scattering Center Extraction"]
-    E --> F["参数后处理<br/>Parameter Post-processing"]
-    F --> G["输出散射中心参数<br/>Output ASC Parameters"]
+    A[MSTAR Raw Data] --> B[MATLAB预处理]
+    B --> C[.raw格式数据]
+    C --> D[Python OMP算法]
+    D --> E[散射中心参数]
+    E --> F[MATLAB重构验证]
   
-    B --> B1["复值图像展开<br/>Complex Image Vectorization"]
-    B --> B2["噪声预处理<br/>Noise Preprocessing"]
+    B --> B1[step1: .mat转换]
+    B --> B2[step2: .raw转换]
   
-    C --> C1["SAR物理模型<br/>SAR Physical Model"]
-    C --> C2["参数网格采样<br/>Parameter Grid Sampling"]
-    C --> C3["字典矩阵生成<br/>Dictionary Matrix Φ"]
+    D --> D1[字典构建]
+    D --> D2[OMP求解]
+    D --> D3[参数提取]
   
-    D --> D1["sklearn.OrthogonalMatchingPursuit<br/>n_nonzero_coefs=40"]
-    D --> D2["稀疏系数求解<br/>Sparse Coefficient α"]
-  
-    E --> E1["非零系数定位<br/>Non-zero Coefficient Location"]
-    E --> E2["参数映射<br/>Parameter Mapping"]
-  
-    F --> F1["位置坐标转换<br/>Position Coordinate Transform"]
-    F --> F2["幅度相位计算<br/>Amplitude Phase Calculation"]
+    F --> F1[仿真重构]
+    F --> F2[误差分析]
 ```

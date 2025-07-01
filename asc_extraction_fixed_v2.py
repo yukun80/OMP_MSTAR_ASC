@@ -10,7 +10,7 @@ Fixed ASC Extraction System v2
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 from sklearn.linear_model import OrthogonalMatchingPursuit
 import struct
 from typing import Tuple, List, Dict, Optional
@@ -26,10 +26,15 @@ class ASCExtractionFixedV2:
     def __init__(
         self,
         image_size: Tuple[int, int] = (128, 128),
-        extraction_mode: str = "point_only",
+        extraction_mode: str = "progressive",
         adaptive_threshold: float = 0.01,
         max_iterations: int = 30,
         max_scatterers: int = 20,
+        # New flexible parameters for dictionary building
+        alpha_values: Optional[List[float]] = None,
+        length_values: Optional[List[float]] = None,
+        phi_bar_values: Optional[List[float]] = None,
+        position_samples: Optional[int] = None,
     ):
         self.image_size = image_size
         self.extraction_mode = extraction_mode
@@ -44,7 +49,14 @@ class ASCExtractionFixedV2:
         self.scene_size = 30.0  # 场景尺寸 (米)
 
         # 配置参数
-        self._configure_extraction_mode()
+        if alpha_values is not None:
+            print("   🔧 使用自定义字典参数进行初始化")
+            self.alpha_values = alpha_values
+            self.length_values = length_values if length_values is not None else [0.0]
+            self.phi_bar_values = phi_bar_values if phi_bar_values is not None else [0.0]
+            self.position_samples = position_samples if position_samples is not None else 64
+        else:
+            self._configure_extraction_mode()
 
         print(f"🔧 修复版ASC提取系统v2初始化")
         print(f"   提取模式: {extraction_mode}")
@@ -66,79 +78,51 @@ class ASCExtractionFixedV2:
             self.position_samples = 20
 
     def load_mstar_data_robust(self, raw_file_path: str) -> Tuple[np.ndarray, np.ndarray]:
-        """稳健的MSTAR数据加载 - 修复NaN问题"""
-        print(f"📂 稳健加载MSTAR数据: {raw_file_path}")
+        """
+        稳健的MSTAR数据加载 - 修复版v3
+        正确解析[幅度..., 相位...]格式的big-endian数据
+        """
+        print(f"📂 稳健加载MSTAR数据 (v3): {raw_file_path}")
 
         try:
             with open(raw_file_path, "rb") as f:
                 data = f.read()
 
-            # 尝试不同的数据格式解析
-            num_values = len(data) // 4
+            # 根据MATLAB脚本，数据为float32, big-endian
+            num_floats = len(data) // 4
+            # 使用 '>' 指定 big-endian
+            all_values = struct.unpack(f">{num_floats}f", data)
+            all_values = np.array(all_values)
 
-            # 方法1：尝试little-endian float32
-            try:
-                real_imag = struct.unpack(f"<{num_values}f", data)
-                print("   使用little-endian float32格式")
-            except:
-                # 方法2：尝试big-endian float32
-                try:
-                    real_imag = struct.unpack(f">{num_values}f", data)
-                    print("   使用big-endian float32格式")
-                except:
-                    # 方法3：尝试int16格式并转换
-                    num_values_int16 = len(data) // 2
-                    int_data = struct.unpack(f"<{num_values_int16}h", data)
-                    real_imag = [float(x) / 32767.0 for x in int_data]  # 归一化
-                    print("   使用int16格式并归一化")
+            # --- 关键修复：正确分离幅度和相位 ---
+            num_pixels = self.image_size[0] * self.image_size[1]
+            if len(all_values) != 2 * num_pixels:
+                raise ValueError(f"数据尺寸不匹配，期望 {2*num_pixels} 个值，实际得到 {len(all_values)}")
 
-            # 检查数据有效性
-            if np.any(np.isnan(real_imag)) or np.any(np.isinf(real_imag)):
-                print("   ⚠️ 检测到NaN/Inf值，进行数据清理...")
-                real_imag = np.array(real_imag)
-                # 将NaN和Inf替换为0
-                real_imag = np.where(np.isnan(real_imag) | np.isinf(real_imag), 0.0, real_imag)
+            magnitude_flat = all_values[:num_pixels]
+            phase_flat = all_values[num_pixels:]
 
-            # 重构复值图像
-            if len(real_imag) % 2 != 0:
-                real_imag = real_imag[:-1]  # 确保偶数长度
+            # --- 重构复数图像 ---
+            complex_image_flat = magnitude_flat * np.exp(1j * phase_flat)
+            complex_image = complex_image_flat.reshape(self.image_size)
 
-            complex_values = []
-            for i in range(0, len(real_imag), 2):
-                if i + 1 < len(real_imag):
-                    complex_values.append(complex(real_imag[i], real_imag[i + 1]))
+            # 数据有效性检查
+            if np.any(np.isnan(complex_image)):
+                print("   ⚠️ 检测到NaN值，进行清理...")
+                complex_image = np.nan_to_num(complex_image)
 
-            # 确保数据长度匹配图像尺寸
-            expected_size = self.image_size[0] * self.image_size[1]
-            if len(complex_values) > expected_size:
-                complex_values = complex_values[:expected_size]
-            elif len(complex_values) < expected_size:
-                # 填充零值
-                complex_values.extend([0.0 + 0.0j] * (expected_size - len(complex_values)))
-
-            complex_image = np.array(complex_values).reshape(self.image_size)
             magnitude = np.abs(complex_image)
-
-            # 最终数据验证
-            if np.any(np.isnan(complex_image)) or np.any(np.isinf(complex_image)):
-                print("   ⚠️ 复值图像中仍有NaN/Inf，进行最终清理...")
-                complex_image = np.where(np.isnan(complex_image) | np.isinf(complex_image), 0.0 + 0.0j, complex_image)
-                magnitude = np.abs(complex_image)
 
             print(f"   ✅ 数据加载成功")
             print(f"      图像尺寸: {complex_image.shape}")
-            print(f"      幅度范围: [{np.min(magnitude):.3f}, {np.max(magnitude):.3f}]")
             print(f"      信号能量: {np.linalg.norm(complex_image):.3f}")
-            print(f"      有效数据比例: {np.sum(magnitude > 0) / magnitude.size:.1%}")
 
             return magnitude, complex_image
 
         except Exception as e:
             print(f"   ❌ 数据加载失败: {str(e)}")
-            # 返回零数据作为备选
-            complex_image = np.zeros(self.image_size, dtype=complex)
-            magnitude = np.zeros(self.image_size)
-            return magnitude, complex_image
+            # 返回零数据
+            return np.zeros(self.image_size), np.zeros(self.image_size, dtype=complex)
 
     def preprocess_data_robust(self, complex_image: np.ndarray) -> np.ndarray:
         """稳健的数据预处理"""
@@ -181,10 +165,7 @@ class ASCExtractionFixedV2:
         fx_range: np.ndarray = None,
         fy_range: np.ndarray = None,
     ) -> np.ndarray:
-        """
-        生成一个数值稳健且物理尺度正确的ASC原子
-        关键修复：统一物理尺度，避免量纲不匹配
-        """
+        """v3版本: 修复了sinc函数参数的物理模型"""
         if fx_range is None:
             fx_range = np.linspace(-self.B / 2, self.B / 2, self.image_size[0])
         if fy_range is None:
@@ -200,10 +181,11 @@ class ASCExtractionFixedV2:
         y_meters = y * (self.scene_size / 2.0)
 
         f_magnitude = np.sqrt(FX**2 + FY**2)
-        f_magnitude_safe = np.where(f_magnitude < 1e-9, 1e-9, f_magnitude)
+
         theta = np.arctan2(FY, FX)
 
         # 1. 频率依赖项 (f/fc)^α - 数值稳定版本
+        f_magnitude_safe = np.where(f_magnitude < 1e-9, 1e-9, f_magnitude)
         if alpha == 0:
             frequency_term = np.ones_like(f_magnitude_safe)
         else:
@@ -216,11 +198,16 @@ class ASCExtractionFixedV2:
 
         # 3. 长度/方位角项 - 修复物理公式
         length_term = np.ones_like(f_magnitude_safe, dtype=float)
-        if length > 1e-6:  # 仅当L不为0时计算
-            k = 2 * np.pi * f_magnitude_safe / C  # 波数
+        if length > 1e-6:
+            k = 2 * np.pi * f_magnitude_safe / C
             angle_diff = theta - phi_bar
-            sinc_arg = k * length * np.sin(angle_diff) / (2 * np.pi)  # 正确的sinc参数
-            length_term = np.sinc(sinc_arg)  # np.sinc(x) = sin(pi*x)/(pi*x)
+
+            # --- 关键修复：修正sinc函数的参数 ---
+            # 物理项 Y = k * length * np.sin(angle_diff) / 2
+            # 我们需要计算 sinc(Y/pi)
+            Y = k * length * np.sin(angle_diff) / 2  # 注意这里的除2是针对线状散射体模型
+            sinc_arg = Y / np.pi
+            length_term = np.sinc(sinc_arg)
 
         # 组合频域响应
         H_asc = frequency_term * length_term * np.exp(position_phase)
@@ -229,6 +216,106 @@ class ASCExtractionFixedV2:
         atom = np.fft.ifftshift(np.fft.ifft2(np.fft.ifftshift(H_asc)))
 
         return atom
+
+    def estimate_params_in_roi(
+        self, complex_image: np.ndarray, center_x: float, center_y: float, roi_size: int = 24
+    ) -> Optional[Dict]:
+        """
+        第二阶段V2版本：在ROI内进行"模型匹配+局部微调"
+        """
+        img_h, img_w = self.image_size
+        px = int((center_x + 1) / 2 * img_w)
+        py = int((center_y + 1) / 2 * img_h)
+        half_size = roi_size // 2
+
+        y_start, y_end = py - half_size, py + half_size
+        x_start, x_end = px - half_size, px + half_size
+        if not (0 <= y_start < y_end <= img_h and 0 <= x_start < x_end <= img_w):
+            return None
+
+        roi_signal = complex_image[y_start:y_end, x_start:x_end]
+
+        # --- 步骤A: 模型匹配 ---
+        # 在离散的参数空间（alpha, length, phi_bar）中找到最佳模型
+        best_match = {"error": float("inf")}
+
+        for alpha in self.alpha_values:
+            for length in self.length_values:
+                for phi_bar in self.phi_bar_values:
+                    # 生成理论原子
+                    atom_full = self._generate_robust_asc_atom(center_x, center_y, alpha, length, phi_bar)
+                    atom_roi = atom_full[y_start:y_end, x_start:x_end]
+
+                    # 计算该模型下的最佳复幅度 (通过投影)
+                    atom_energy = np.linalg.norm(atom_roi)
+                    if atom_energy < 1e-9:
+                        continue
+
+                    complex_amp = np.vdot(atom_roi, roi_signal) / atom_energy**2
+
+                    # 计算该模型下的拟合误差
+                    error = np.linalg.norm(roi_signal - complex_amp * atom_roi)
+
+                    if error < best_match["error"]:
+                        best_match = {
+                            "error": error,
+                            "alpha": alpha,
+                            "length": length,
+                            "phi_bar": phi_bar,
+                            "amp": np.abs(complex_amp),
+                            "phase": np.angle(complex_amp),
+                        }
+
+        # --- 步骤B: 局部微调 ---
+        # 使用上一步找到的最佳参数作为初始值，对连续参数(x, y, A, φ)进行微调
+
+        # 固定的离散参数
+        alpha_fixed = best_match["alpha"]
+        length_fixed = best_match["length"]
+        phi_bar_fixed = best_match["phi_bar"]
+
+        def objective(params):  # x, y, amp, phase
+            x, y, amp, phase = params
+            atom_full = self._generate_robust_asc_atom(x, y, alpha_fixed, length_fixed, phi_bar_fixed)
+            atom_roi = atom_full[y_start:y_end, x_start:x_end]
+            reconstruction = amp * np.exp(1j * phase) * atom_roi
+            return np.linalg.norm(roi_signal - reconstruction)
+
+        x0 = [center_x, center_y, best_match["amp"], best_match["phase"]]
+        # 限制微调范围，防止优化跑飞
+        bounds = [
+            (center_x - 0.1, center_x + 0.1),
+            (center_y - 0.1, center_y + 0.1),
+            (0, 2 * best_match["amp"]),
+            (-np.pi, np.pi),
+        ]
+
+        result = minimize(objective, x0, method="L-BFGS-B", bounds=bounds, options={"maxiter": 50})
+
+        if result.success:
+            return {
+                "alpha": alpha_fixed,
+                "length": length_fixed,
+                "phi_bar": phi_bar_fixed,
+                "x": result.x[0],
+                "y": result.x[1],
+                "estimated_amplitude": result.x[2],
+                "estimated_phase": result.x[3],
+                "scattering_type": self._classify_scattering_type(alpha_fixed),
+                "optimization_success": True,
+            }
+        else:  # 优化失败，返回粗匹配结果
+            return {
+                "alpha": best_match["alpha"],
+                "length": best_match["length"],
+                "phi_bar": best_match["phi_bar"],
+                "x": center_x,
+                "y": center_y,
+                "estimated_amplitude": best_match["amp"],
+                "estimated_phase": best_match["phase"],
+                "scattering_type": self._classify_scattering_type(best_match["alpha"]),
+                "optimization_success": False,
+            }
 
     def build_compact_dictionary(self) -> Tuple[np.ndarray, List[Dict]]:
         """构建紧凑高效的字典"""

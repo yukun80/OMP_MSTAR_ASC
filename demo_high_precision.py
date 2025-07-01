@@ -179,140 +179,91 @@ def test_high_precision_extraction():
 def visualize_high_precision_results(complex_image, scatterers):
     """Create high-quality visualization of extraction results"""
     if not scatterers:
-        print("⚠️ No scatterers to visualize")
+        print("⚠️ 未提取到散射中心，无法进行可视化。")
         return
 
     print(f"\n🎨 Creating High-Quality Visualization...")
 
     magnitude = np.abs(complex_image)
 
-    # Create comprehensive visualization
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(
+        2, 2, figsize=(16, 12), gridspec_kw={"width_ratios": [1, 1], "height_ratios": [1, 1]}
+    )
+    fig.suptitle("High-Precision ASC Extraction Results", fontsize=16, weight="bold")
 
-    # 1. Original SAR image
-    im1 = ax1.imshow(magnitude, cmap="gray", origin="lower")
-    ax1.set_title("Original SAR Image", fontsize=14, weight="bold")
-    ax1.set_xlabel("Range (pixels)")
-    ax1.set_ylabel("Azimuth (pixels)")
-    plt.colorbar(im1, ax=ax1, label="Magnitude")
+    # 1. 原始SAR图像
+    im1 = ax1.imshow(magnitude, cmap="gray", origin="lower", extent=[-1, 1, -1, 1])
+    ax1.set_title("Original SAR Image")
+    ax1.set_xlabel("X Position (Normalized)")
+    ax1.set_ylabel("Y Position (Normalized)")
 
-    # 2. Scatterer positions overlay
-    ax2.imshow(magnitude, cmap="gray", origin="lower", extent=(-1, 1, -1, 1), alpha=0.7)
+    # 2. 提取的散射中心叠加图
+    ax2.imshow(magnitude, cmap="gray", origin="lower", extent=[-1, 1, -1, 1], alpha=0.7)
 
-    # Color mapping for scattering types
-    alpha_colors = {
-        -1.0: "blue",  # Dihedral
-        -0.5: "green",  # Edge Diffraction
-        0.0: "yellow",  # Isotropic
-        0.5: "red",  # Surface
-        1.0: "purple",  # Specular
-    }
+    alpha_colors = {-1.0: "blue", -0.5: "cyan", 0.0: "green", 0.5: "orange", 1.0: "red"}
+    alpha_names = {-1.0: "Dihedral", -0.5: "Edge", 0.0: "Isotropic", 0.5: "Surface", 1.0: "Specular"}
 
     for i, sc in enumerate(scatterers):
-        x, y = sc["x"], sc["y"]
-        alpha = sc["alpha"]
+        # 颜色代表类型, 大小代表幅度, 边框代表优化状态
+        color = alpha_colors.get(sc["alpha"], "purple")
         amplitude = sc["estimated_amplitude"]
-        opt_success = sc.get("optimization_success", False)
 
-        color = alpha_colors.get(alpha, "gray")
-        size = 100 + amplitude * 500  # Size represents amplitude
-        marker = "o" if opt_success else "s"  # Circle=optimized, Square=initial
+        # --- 关键修复：使用对数缩放来可视化幅度 ---
+        # 这可以防止单个超强点掩盖其他所有点
+        log_amp = np.log1p(amplitude)  # 使用 log1p(x) = log(1+x) 避免 log(0)
+        size = 50 + log_amp * 100  # 调整系数
 
-        ax2.scatter(x, y, s=size, c=color, alpha=0.8, marker=marker, edgecolors="white", linewidth=2)
-        ax2.annotate(
-            f"{i+1}", (x, y), xytext=(5, 5), textcoords="offset points", fontsize=9, color="white", weight="bold"
-        )
+        edge_color = "lime" if sc.get("optimization_success", False) else "gray"
+        ax2.scatter(sc["x"], sc["y"], s=size, c=color, alpha=0.8, edgecolors=edge_color, linewidth=1.5)
+        ax2.text(sc["x"] + 0.02, sc["y"] + 0.02, str(i + 1), color="white", fontsize=8)
 
-    ax2.set_title(f"Extracted Scatterers - {len(scatterers)} Total", fontsize=14, weight="bold")
-    ax2.set_xlabel("X Position (Normalized)")
-    ax2.set_ylabel("Y Position (Normalized)")
+    ax2.set_title("Extracted Scatterers Overlay")
     ax2.set_xlim(-1, 1)
     ax2.set_ylim(-1, 1)
-    ax2.grid(True, alpha=0.3)
 
-    # 3. Parameter analysis
+    # 3. 参数空间分析 (Alpha vs Amplitude, color-coded by Length)
     alphas = [s["alpha"] for s in scatterers]
-    amplitudes = [s["estimated_amplitude"] for s in scatterers]
+    amps = [s["estimated_amplitude"] for s in scatterers]
     lengths = [s.get("length", 0.0) for s in scatterers]
-
-    scatter3 = ax3.scatter(alphas, amplitudes, s=100, c=lengths, cmap="viridis", alpha=0.7)
+    scatter3 = ax3.scatter(alphas, amps, s=150, c=lengths, cmap="viridis", alpha=0.7)
+    ax3.set_title("Parameter Space Analysis")
     ax3.set_xlabel("Alpha (Scattering Mechanism)")
     ax3.set_ylabel("Amplitude")
-    ax3.set_title("Parameter Space Analysis", fontsize=14, weight="bold")
-    ax3.grid(True, alpha=0.3)
     plt.colorbar(scatter3, ax=ax3, label="Length Parameter")
+    ax3.grid(True, linestyle="--")
 
-    # 4. Statistics and legend
+    # 4. 统计与图例
     ax4.axis("off")
-
-    # Create legend
-    legend_elements = []
-    plotted_alphas = set(alphas)
-    alpha_names = {
-        -1.0: "Dihedral (α=-1.0)",
-        -0.5: "Edge Diffraction (α=-0.5)",
-        0.0: "Isotropic (α=0.0)",
-        0.5: "Surface (α=0.5)",
-        1.0: "Specular (α=1.0)",
-    }
-
-    for alpha in sorted(plotted_alphas):
-        color = alpha_colors.get(alpha, "gray")
-        name = alpha_names.get(alpha, f"α={alpha}")
-        legend_elements.append(
-            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=color, markersize=10, label=name)
+    if scatterers:
+        opt_success_rate = sum(1 for s in scatterers if s.get("optimization_success", False)) / len(scatterers)
+        stats_text = (
+            f"Extraction Statistics:\n"
+            f"--------------------------\n"
+            f"Total Scatterers: {len(scatterers)}\n"
+            f"Optimization Success: {opt_success_rate:.1%}\n"
+            f"Avg. Amplitude: {np.mean(amps):.4f}\n"
+            f"Avg. Length: {np.mean(lengths):.4f}\n\n"
+            f"Scattering Type Legend:"
+        )
+        ax4.text(
+            0.05,
+            0.95,
+            stats_text,
+            transform=ax4.transAxes,
+            va="top",
+            fontsize=12,
+            bbox=dict(boxstyle="round,pad=0.5", fc="aliceblue", ec="b", lw=1),
         )
 
-    # Add marker type legend
-    legend_elements.append(
-        plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="gray", markersize=10, label="Optimized")
-    )
-    legend_elements.append(
-        plt.Line2D([0], [0], marker="s", color="w", markerfacecolor="gray", markersize=10, label="Initial Match")
-    )
+        legend_elements = [
+            plt.Line2D(
+                [0], [0], marker="o", color="w", label=f"{name} (α={alpha})", markerfacecolor=color, markersize=10
+            )
+            for alpha, name, color in zip(alpha_names.keys(), alpha_names.values(), alpha_colors.values())
+        ]
+        ax4.legend(handles=legend_elements, loc="center left", bbox_to_anchor=(0.05, 0.2), title="Scattering Types")
 
-    ax4.legend(
-        handles=legend_elements,
-        title="Scattering Types & Optimization Status",
-        fontsize=12,
-        title_fontsize=14,
-        loc="center",
-    )
-
-    # Add statistics text
-    opt_count = sum(1 for s in scatterers if s.get("optimization_success", False))
-    avg_amplitude = np.mean(amplitudes)
-    avg_length = np.mean(lengths)
-
-    stats_text = f"""
-High-Precision Extraction Statistics:
-
-• Total Scatterers: {len(scatterers)}
-• Optimization Success: {opt_count}/{len(scatterers)} ({opt_count/len(scatterers)*100:.1f}%)
-• Average Amplitude: {avg_amplitude:.3f}
-• Average Length: {avg_length:.3f}
-
-Scattering Type Distribution:"""
-
-    type_counts = {}
-    for s in scatterers:
-        stype = s.get("scattering_type", "Unknown")
-        type_counts[stype] = type_counts.get(stype, 0) + 1
-
-    for stype, count in type_counts.items():
-        stats_text += f"\n• {stype}: {count}"
-
-    ax4.text(
-        0.05,
-        0.95,
-        stats_text,
-        transform=ax4.transAxes,
-        fontsize=11,
-        verticalalignment="top",
-        bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.8),
-    )
-
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
 
     # Save high-quality image
     timestamp = time.strftime("%Y%m%d_%H%M%S")

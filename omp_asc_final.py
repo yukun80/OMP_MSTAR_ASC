@@ -21,10 +21,11 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-class OMPASCFinal:
+class OMPASCExtractor:
     """
-    Final Fixed OMP-based Automatic Scattering Center (ASC) Extraction
+    OMP-based Automatic Scattering Center (ASC) Extraction
 
+    Traditional OMP implementation with fixed grid and sparsity
     Key improvement: Consistent amplitude handling throughout the pipeline
     """
 
@@ -170,12 +171,19 @@ class OMPASCFinal:
         atom = np.fft.ifft2(np.fft.ifftshift(freq_response))
         return atom
 
-    def extract_scatterers(self, signal: np.ndarray, dictionary: Optional[np.ndarray] = None) -> Dict:
+    def extract_scatterers(
+        self, signal: np.ndarray, dictionary: Optional[np.ndarray] = None, param_grid: Optional[List[Dict]] = None
+    ) -> List[Dict]:
         """Extract scatterers with corrected amplitude estimation"""
         if dictionary is None:
             if self.dictionary is None:
                 raise ValueError("Dictionary not built. Call build_dictionary() first.")
             dictionary = self.dictionary
+
+        if param_grid is None:
+            if self.param_grid is None:
+                raise ValueError("Parameter grid not available. Call build_dictionary() first.")
+            param_grid = self.param_grid
 
         print("Extracting scattering centers with corrected amplitude handling...")
 
@@ -205,7 +213,7 @@ class OMPASCFinal:
         # Extract scatterer parameters with CORRECTED amplitude estimation
         scatterers = []
         for idx, coef in zip(nonzero_indices, nonzero_coefs):
-            param = self.param_grid[idx].copy()
+            param = param_grid[idx].copy()
 
             # KEY FIX: Direct amplitude from OMP coefficient magnitude
             # Since dictionary atoms are unit amplitude and normalized,
@@ -221,7 +229,8 @@ class OMPASCFinal:
         # Sort by amplitude
         scatterers.sort(key=lambda x: x["estimated_amplitude"], reverse=True)
 
-        results = {
+        # Store full results for internal use
+        self._last_results = {
             "scatterers": scatterers,
             "coefficients": coefficients,
             "nonzero_indices": nonzero_indices,
@@ -229,7 +238,7 @@ class OMPASCFinal:
             "model": self.omp_model,
         }
 
-        return results
+        return scatterers
 
     def reconstruct_image(self, scatterers: List[Dict]) -> np.ndarray:
         """Reconstruct SAR image with corrected amplitude scaling"""
@@ -333,7 +342,7 @@ def main():
     """Main execution function"""
     print("=== Final OMP-based SAR Scattering Center Extraction ===")
 
-    omp_asc = OMPASCFinal(n_scatterers=40, use_cv=False)
+    omp_asc = OMPASCExtractor(n_scatterers=40, use_cv=False)
 
     # Example workflow
     raw_file_path = "path/to/your/data.128x128.raw"
@@ -344,18 +353,16 @@ def main():
 
         dictionary, param_grid = omp_asc.build_dictionary(position_grid_size=16, phase_levels=4)
 
-        results = omp_asc.extract_scatterers(signal)
-        reconstructed = omp_asc.reconstruct_image(results["scatterers"])
+        scatterers = omp_asc.extract_scatterers(signal, dictionary, param_grid)
+        reconstructed = omp_asc.reconstruct_image(scatterers)
 
-        omp_asc.visualize_results(
-            magnitude, reconstructed, results["scatterers"], save_path="final_omp_asc_results.png"
-        )
+        omp_asc.visualize_results(magnitude, reconstructed, scatterers, save_path="final_omp_asc_results.png")
 
         print(f"\n=== Final Extraction Summary ===")
-        print(f"Number of scatterers extracted: {len(results['scatterers'])}")
-        print(f"Reconstruction error: {results['reconstruction_error']:.3f}")
+        print(f"Number of scatterers extracted: {len(scatterers)}")
+        print(f"Reconstruction error: {omp_asc._last_results['reconstruction_error']:.3f}")
         print(f"Top 5 strongest scatterers:")
-        for i, scatterer in enumerate(results["scatterers"][:5]):
+        for i, scatterer in enumerate(scatterers[:5]):
             print(
                 f"  {i+1}. Position: ({scatterer['x']:.3f}, {scatterer['y']:.3f}), "
                 f"Amplitude: {scatterer['estimated_amplitude']:.3f}"

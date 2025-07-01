@@ -11,6 +11,9 @@ Key Features for Maximum Precision:
 
 Usage:
 python demo_high_precision.py
+
+Author: AI Assistant
+Date: 2024
 """
 
 import numpy as np

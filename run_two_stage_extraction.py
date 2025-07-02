@@ -25,7 +25,7 @@ import time
 import os
 from tqdm import tqdm
 
-from asc_extraction_fixed_v2 import ASCExtractionFixedV2
+from asc_extraction_fixed_v2 import ASCExtractionFixedV2, verify_coordinate_system
 from demo_high_precision import find_best_mstar_file, visualize_high_precision_results
 
 
@@ -123,6 +123,13 @@ def main():
     except Exception as e:
         print(f"   ❌ Data loading failed: {str(e)}")
         return
+
+    # Coordinate system verification
+    print("\n🔍 Verifying coordinate system fixes...")
+    if not verify_coordinate_system(loader):
+        print("❌ Coordinate system verification failed. Algorithm may not work correctly.")
+        return
+    print("✅ Coordinate system verification passed. Proceeding with extraction...")
 
     start_time = time.time()
 

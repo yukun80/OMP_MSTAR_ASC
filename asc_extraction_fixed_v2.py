@@ -165,47 +165,51 @@ class ASCExtractionFixedV2:
         fx_range: np.ndarray = None,
         fy_range: np.ndarray = None,
     ) -> np.ndarray:
-        """v3版本: 修复了sinc函数参数的物理模型"""
+        """
+        v4版本: 修正了物理坐标系交换的致命错误
+        核心修复：正确映射距离维和方位维坐标系
+        """
         if fx_range is None:
-            fx_range = np.linspace(-self.B / 2, self.B / 2, self.image_size[0])
+            # Range frequency (horizontal) - 注意：对应图像宽度
+            fx_range = np.linspace(-self.B / 2, self.B / 2, self.image_size[1])
         if fy_range is None:
+            # Azimuth frequency (vertical) - 注意：对应图像高度
             fy_range = np.linspace(
-                -self.fc * np.sin(self.omega / 2), self.fc * np.sin(self.omega / 2), self.image_size[1]
+                -self.fc * np.sin(self.omega / 2), self.fc * np.sin(self.omega / 2), self.image_size[0]
             )
 
-        FX, FY = np.meshgrid(fx_range, fy_range, indexing="ij")
+        # --- 关键修复：交换频率定义以匹配图像坐标系 ---
+        # meshgrid的第一个输出(FY_grid)对应图像的行(azimuth)，第二个输出(FX_grid)对应列(range)
+        FY_grid, FX_grid = np.meshgrid(fy_range, fx_range, indexing="ij")
 
-        # --- 关键修复：统一物理尺度 ---
+        # --- 后续计算使用正确的网格 ---
         C = 299792458.0  # 光速
         x_meters = x * (self.scene_size / 2.0)  # 将归一化坐标[-1,1]转为米
         y_meters = y * (self.scene_size / 2.0)
 
-        f_magnitude = np.sqrt(FX**2 + FY**2)
-
-        theta = np.arctan2(FY, FX)
+        f_magnitude = np.sqrt(FX_grid**2 + FY_grid**2)
+        f_magnitude_safe = np.where(f_magnitude < 1e-9, 1e-9, f_magnitude)
 
         # 1. 频率依赖项 (f/fc)^α - 数值稳定版本
-        f_magnitude_safe = np.where(f_magnitude < 1e-9, 1e-9, f_magnitude)
         if alpha == 0:
             frequency_term = np.ones_like(f_magnitude_safe)
         else:
             normalized_freq = f_magnitude_safe / self.fc
             frequency_term = np.power(normalized_freq, alpha)
 
-        # 2. 位置相位项 - 修复物理尺度
-        # 正确公式: exp(-j*2*pi/c * (FX*x_m + FY*y_m))
-        position_phase = -2j * np.pi / C * (FX * x_meters + FY * y_meters)
+        # 2. 位置相位项 - 使用正确的频率网格
+        # 正确公式: exp(-j*2*pi/c * (FX_grid*x_m + FY_grid*y_m))
+        position_phase = -2j * np.pi / C * (FX_grid * x_meters + FY_grid * y_meters)
 
-        # 3. 长度/方位角项 - 修复物理公式
+        # 3. 长度/方位角项 - 使用正确的频率网格
         length_term = np.ones_like(f_magnitude_safe, dtype=float)
         if length > 1e-6:
             k = 2 * np.pi * f_magnitude_safe / C
+            theta = np.arctan2(FY_grid, FX_grid)  # 使用正确的频率网格
             angle_diff = theta - phi_bar
 
-            # --- 关键修复：修正sinc函数的参数 ---
             # 物理项 Y = k * length * np.sin(angle_diff) / 2
-            # 我们需要计算 sinc(Y/pi)
-            Y = k * length * np.sin(angle_diff) / 2  # 注意这里的除2是针对线状散射体模型
+            Y = k * length * np.sin(angle_diff) / 2
             sinc_arg = Y / np.pi
             length_term = np.sinc(sinc_arg)
 
@@ -321,9 +325,11 @@ class ASCExtractionFixedV2:
         """构建紧凑高效的字典"""
         print(f"📚 构建紧凑ASC字典...")
 
-        # 频率采样
-        fx_range = np.linspace(-self.B / 2, self.B / 2, self.image_size[0])
-        fy_range = np.linspace(-self.fc * np.sin(self.omega / 2), self.fc * np.sin(self.omega / 2), self.image_size[1])
+        # 频率采样 - 修复坐标系一致性
+        fx_range = np.linspace(-self.B / 2, self.B / 2, self.image_size[1])  # Range (horizontal)
+        fy_range = np.linspace(
+            -self.fc * np.sin(self.omega / 2), self.fc * np.sin(self.omega / 2), self.image_size[0]
+        )  # Azimuth (vertical)
 
         # 位置采样
         x_positions = np.linspace(-0.8, 0.8, self.position_samples)
